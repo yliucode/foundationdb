@@ -2764,6 +2764,7 @@ ACTOR Future<Void> update( StorageServer* data, bool* pReceivedUpdate )
 				waitStartT = now();
 			}
 
+			// data is left behind
 			data->behind = true;
 			wait( delayJittered(.005, TaskPriority::TLogPeekReply) );
 		}
@@ -2785,6 +2786,7 @@ ACTOR Future<Void> update( StorageServer* data, bool* pReceivedUpdate )
 			throw worker_removed();
 
 		++data->counters.updateBatches;
+		//
 		data->lastTLogVersion = cursor->getMaxKnownVersion();
 		data->versionLag = std::max<int64_t>(0, data->lastTLogVersion - data->version.get());
 
@@ -3032,6 +3034,7 @@ ACTOR Future<Void> update( StorageServer* data, bool* pReceivedUpdate )
 	}
 }
 
+// pulling logs and update storage
 ACTOR Future<Void> updateStorage(StorageServer* data) {
 	loop {
 		ASSERT( data->durableVersion.get() == data->storageVersion() );
@@ -3309,6 +3312,7 @@ ACTOR Future<Void> restoreByteSample(StorageServer* data, IKeyValueStore* storag
 	return Void();
 }
 
+// Where storage server restore its state
 ACTOR Future<bool> restoreDurableState( StorageServer* data, IKeyValueStore* storage ) {
 	state Future<Optional<Value>> fFormat = storage->readValue(persistFormat.key);
 	state Future<Optional<Value>> fID = storage->readValue(persistID);

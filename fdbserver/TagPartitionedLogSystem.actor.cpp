@@ -198,6 +198,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	std::map< std::pair<UID, Tag>, std::pair<Version, Version> > outstandingPops;  // For each currently running popFromLog actor, (log server #, tag)->popped version
 	Optional<PromiseStream<Future<Void>>> addActor;
 	ActorCollection popActors;
+
+	// state that tracks old logs inside the tlogsystem
 	std::vector<OldLogData> oldLogData; // each element has the log info. in one old epoch.
 	AsyncTrigger logSystemConfigChanged;
 
@@ -386,6 +388,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	Future<Void> onCoreStateChanged() final {
 		std::vector<Future<Void>> changes;
 		changes.push_back(Never());
+
+		// is recoveryComplete the signal that logsystem triggeres so that master can know
 		if(recoveryComplete.isValid() && !recoveryComplete.isReady()) {
 			changes.push_back(recoveryComplete);
 		}
@@ -2461,6 +2465,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 
 		for( int i = 0; i < logSystem->tLogs[0]->logServers.size(); i++)
 			recoveryComplete.push_back( transformErrors( throwErrorOr( logSystem->tLogs[0]->logServers[i]->get().interf().recoveryFinished.getReplyUnlessFailedFor( TLogRecoveryFinishedRequest(), SERVER_KNOBS->TLOG_TIMEOUT, SERVER_KNOBS->MASTER_FAILURE_SLOPE_DURING_RECOVERY ) ), master_recovery_failed() ) );
+		// where it gets assigned
 		logSystem->recoveryComplete = waitForAll(recoveryComplete);
 
 		if(configuration.usableRegions > 1) {

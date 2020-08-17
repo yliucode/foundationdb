@@ -1163,6 +1163,7 @@ ACTOR Future<Void> rejoinRequestHandler( Reference<MasterData> self ) {
 	}
 }
 
+// Here we detect whether storage servers has recovered from old tlogs or not.
 ACTOR Future<Void> trackTlogRecovery( Reference<MasterData> self, Reference<AsyncVar<Reference<ILogSystem>>> oldLogSystems, Future<Void> minRecoveryDuration ) {
 	state Future<Void> rejoinRequests = Never();
 	state DBRecoveryCount recoverCount = self->cstate.myDBState.recoveryCount + 1;
@@ -1192,6 +1193,9 @@ ACTOR Future<Void> trackTlogRecovery( Reference<MasterData> self, Reference<Asyn
 			TraceEvent("MasterRecoveryGenerations", self->dbgid)
 			.detail("ActiveGenerations", 1)
 			.trackLatest("MasterRecoveryGenerations");
+
+			// newState.oldTLogData.size() == 0 means storage servers has consumed old tlogs
+			// where does oldTLogData get erased
 		} else if( !newState.oldTLogData.size() && self->recoveryState < RecoveryState::STORAGE_RECOVERED ) {
 			self->recoveryState = RecoveryState::STORAGE_RECOVERED;
 			TraceEvent("MasterRecoveryState", self->dbgid)
