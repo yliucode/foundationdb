@@ -21,6 +21,7 @@
 // This file declares the actors used by the RestoreLoader role
 
 #pragma once
+#include "fdbclient/Notified.h"
 #if defined(NO_INTELLISENSE) && !defined(FDBSERVER_RESTORE_LOADER_G_H)
 #define FDBSERVER_RESTORE_LOADER_G_H
 #include "fdbserver/RestoreLoader.actor.g.h"
@@ -221,9 +222,11 @@ struct RestoreLoaderData : RestoreRoleData, public ReferenceCounted<RestoreLoade
 	}
 
 	void resetPerRestoreRequest() {
+		TraceEvent("FastRestoreLoaderResetVersionBatch", nodeID);
 		batch.clear();
 		status.clear();
 		finishedBatch = NotifiedVersion(0);
+		versionBatchId = NotifiedVersion(0);
 	}
 
 	void initBackupContainer(Key url) {

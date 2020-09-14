@@ -215,6 +215,7 @@ Future<ErrorOr<X>> waitValueOrSignal( Future<X> value, Future<Void> signal, Endp
 			if (e.code() != error_code_broken_promise || signal.isError())
 				return ErrorOr<X>(e);
 
+			TraceEvent("ReachHere42");
 			IFailureMonitor::failureMonitor().endpointNotFound( endpoint );
 			value = Never();
 		}
@@ -230,6 +231,7 @@ Future<T> sendCanceler( ReplyPromise<T> reply, ReliablePacket* send, Endpoint en
 	} catch (Error& e) {
 		FlowTransport::transport().cancelReliable(send);
 		if (e.code() == error_code_broken_promise) {
+			TraceEvent("ReachHere43");
 			IFailureMonitor::failureMonitor().endpointNotFound( endpoint );
 		}
 		throw;
@@ -243,6 +245,7 @@ Future<X> reportEndpointFailure( Future<X> value, Endpoint endpoint ) {
 		return x;
 	} catch (Error& e) {
 		if (e.code() == error_code_broken_promise) {
+			TraceEvent("ReachHere44");
 			IFailureMonitor::failureMonitor().endpointNotFound( endpoint );
 		}
 		throw;

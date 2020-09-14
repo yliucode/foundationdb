@@ -21,6 +21,7 @@
 // This file implements the functions and actors used by the RestoreLoader role.
 // The RestoreLoader role starts with the restoreLoaderCore actor
 
+#include "flow/Trace.h"
 #include "flow/UnitTest.h"
 #include "fdbclient/BackupContainer.h"
 #include "fdbclient/BackupAgent.actor.h"
@@ -70,6 +71,8 @@ ACTOR Future<Void> handleFinishVersionBatchRequest(RestoreVersionBatchRequest re
 // Dispatch requests based on node's business (i.e, cpu usage for now) and requests' priorities
 // Requests for earlier version batches are preferred; which is equivalent to
 // sendMuttionsRequests are preferred than loadingFileRequests
+
+// problem is here
 ACTOR Future<Void> dispatchRequests(Reference<RestoreLoaderData> self) {
 	try {
 		state int curVBInflightReqs = 0;
@@ -201,6 +204,8 @@ ACTOR Future<Void> dispatchRequests(Reference<RestoreLoaderData> self) {
 			updateProcessStats(self);
 
 			if (self->loadingQueue.empty() && self->sendingQueue.empty() && self->sendLoadParamQueue.empty()) {
+
+				// only third request stalls here
 				TraceEvent(SevDebug, "FastRestoreLoaderDispatchRequestsWaitOnRequests", self->id())
 				    .detail("HasPendingRequests", self->hasPendingRequests->get());
 				self->hasPendingRequests->set(false);
@@ -243,14 +248,22 @@ ACTOR Future<Void> restoreLoaderCore(RestoreLoaderInterface loaderInterf, int no
 					requestTypeStr = "updateRestoreSysInfo";
 					handleRestoreSysInfoRequest(req, self);
 				}
+				// handles load file
 				when(RestoreLoadFileRequest req = waitNext(loaderInterf.loadFile.getFuture())) {
 					requestTypeStr = "loadFile";
+
 					hasQueuedRequests = !self->loadingQueue.empty() || !self->sendingQueue.empty();
 					self->initBackupContainer(req.param.url);
 					self->loadingQueue.push(req);
 					if (!hasQueuedRequests) {
 						self->hasPendingRequests->set(true);
 					}
+
+					TraceEvent("GetLoadFileRequest")
+						.detail("LoadId", self->describeNode())
+						.detail("L1", hasQueuedRequests)
+						.detail("L2", self->loadingQueue.size())
+						.detail("Req", req.param.toString());
 				}
 				when(RestoreSendMutationsToAppliersRequest req = waitNext(loaderInterf.sendMutations.getFuture())) {
 					requestTypeStr = "sendMutations";
@@ -559,16 +572,19 @@ ACTOR Future<Void> _processLoadingParam(KeyRangeMap<Version>* pRangeVersions, Lo
 
 // A loader can process multiple RestoreLoadFileRequest in parallel.
 ACTOR Future<Void> handleLoadFileRequest(RestoreLoadFileRequest req, Reference<RestoreLoaderData> self) {
-	state Reference<LoaderBatchData> batchData = self->batch[req.batchIndex];
+	TraceEvent("Hehe2").detail("BatchMapSize", self->batch.size()).detail("BatchIndex", req.batchIndex).detail("Loader", self->describeNode());
+	state Reference<LoaderBatchData> batchData = self->batch[req.batchIndex]; // null ptr
 	state bool isDuplicated = true;
 	state bool printTrace = false;
+	// error here
 	ASSERT(batchData.isValid());
 	ASSERT(req.batchIndex > self->finishedBatch.get());
 	bool paramExist = batchData->processedFileParams.find(req.param) != batchData->processedFileParams.end();
 	bool isReady = paramExist ? batchData->processedFileParams[req.param].isReady() : false;
 
 	batchData->loadFileReqs += 1;
-	printTrace = (batchData->loadFileReqs % 10 == 1);
+	// printTrace = (batchData->loadFileReqs % 10 == 1);
+	printTrace = true;
 	// TODO: Make the actor priority lower than sendMutation priority. (Unsure it will help performance though)
 	TraceEvent(printTrace ? SevInfo : SevFRDebugInfo, "FastRestoreLoaderPhaseLoadFile", self->id())
 	    .detail("BatchIndex", req.batchIndex)
@@ -597,7 +613,11 @@ ACTOR Future<Void> handleLoadFileRequest(RestoreLoadFileRequest req, Reference<R
 	}
 	auto it = batchData->processedFileParams.find(req.param);
 	ASSERT(it != batchData->processedFileParams.end());
+
+	// stall here
 	wait(it->second); // wait on the processing of the req.param.
+
+	TraceEvent("ReachHere10");
 
 	// Send sampled mutations back to controller:  batchData->sampleMutations[req.param]
 	std::vector<Future<RestoreCommonReply>> fSendSamples;
@@ -608,21 +628,27 @@ ACTOR Future<Void> handleLoadFileRequest(RestoreLoadFileRequest req, Reference<R
 		sampleBatchSize += samples[i].totalSize();
 		sampleBatch.push_back_deep(sampleBatch.arena(), samples[i]); // TODO: may not need deep copy
 		if (sampleBatchSize >= SERVER_KNOBS->FASTRESTORE_SAMPLE_MSG_BYTES) {
+			UID id = deterministicRandom()->randomUniqueID();
 			fSendSamples.push_back(self->ci.samples.getReply(
-			    RestoreSamplesRequest(deterministicRandom()->randomUniqueID(), req.batchIndex, sampleBatch)));
+			    RestoreSamplesRequest(id, req.batchIndex, sampleBatch)));
+			// TraceEvent("ReachHere11Send1").detail("ReqId", id);
 			sampleBatchSize = 0;
 			sampleBatch = SampledMutationsVec();
 		}
 	}
 	if (sampleBatchSize > 0) {
+		UID id = deterministicRandom()->randomUniqueID();
 		fSendSamples.push_back(self->ci.samples.getReply(
-		    RestoreSamplesRequest(deterministicRandom()->randomUniqueID(), req.batchIndex, sampleBatch)));
+		    RestoreSamplesRequest(id, req.batchIndex, sampleBatch)));
+		TraceEvent("ReachHere11Send2").detail("ReqId", id);
 		sampleBatchSize = 0;
 	}
 
 	try {
 		state int samplesMessages = fSendSamples.size();
+		TraceEvent("ReachHere11"); // 15
 		wait(waitForAll(fSendSamples));
+		TraceEvent("ReachHere12");  // 14
 	} catch (Error& e) { // In case ci.samples throws broken_promise due to unstable network
 		if (e.code() == error_code_broken_promise || e.code() == error_code_operation_cancelled) {
 			TraceEvent(SevWarnAlways, "FastRestoreLoaderPhaseLoadFileSendSamples")

@@ -21,6 +21,7 @@
 // This file declears RestoreApplier interface and actors
 
 #pragma once
+#include "fdbclient/Notified.h"
 #if defined(NO_INTELLISENSE) && !defined(FDBSERVER_RESTORE_APPLIER_G_H)
 #define FDBSERVER_RESTORE_APPLIER_G_H
 #include "fdbserver/RestoreApplier.actor.g.h"
@@ -395,6 +396,7 @@ struct RestoreApplierData : RestoreRoleData, public ReferenceCounted<RestoreAppl
 	void resetPerRestoreRequest() {
 		batch.clear();
 		finishedBatch = NotifiedVersion(0);
+		versionBatchId = NotifiedVersion(0);
 	}
 
 	std::string describeNode() {

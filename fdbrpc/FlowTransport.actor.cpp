@@ -19,6 +19,7 @@
  */
 
 #include "fdbrpc/FlowTransport.h"
+#include "flow/Trace.h"
 
 #include <unordered_map>
 #if VALGRIND
@@ -167,6 +168,7 @@ struct EndpointNotFoundReceiver : NetworkMessageReceiver {
 		// Remote machine tells us it doesn't have endpoint e
 		Endpoint e;
 		reader.deserialize(e);
+		TraceEvent("ReachHere41");
 		IFailureMonitor::failureMonitor().endpointNotFound(e);
 	}
 };

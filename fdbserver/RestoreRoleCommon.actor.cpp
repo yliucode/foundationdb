@@ -29,6 +29,7 @@
 #include "fdbserver/RestoreApplier.actor.h"
 #include "fdbserver/RestoreController.actor.h"
 
+#include "flow/Trace.h"
 #include "flow/actorcompiler.h" // This must be the last #include.
 
 class Database;
@@ -43,6 +44,7 @@ ACTOR Future<Void> handleHeartbeat(RestoreSimpleRequest req, UID id) {
 }
 
 void handleFinishRestoreRequest(const RestoreFinishRequest& req, Reference<RestoreRoleData> self) {
+	// here we clear
 	self->resetPerRestoreRequest();
 	TraceEvent("FastRestoreRolePhaseFinishRestoreRequest", self->id())
 	    .detail("FinishRestoreRequest", req.terminate)
@@ -62,6 +64,8 @@ ACTOR Future<Void> handleInitVersionBatchRequest(RestoreVersionBatchRequest req,
 
 	// batchId is continuous. (req.batchIndex-1) is the id of the just finished batch.
 	wait(self->versionBatchId.whenAtLeast(req.batchIndex - 1));
+
+	TraceEvent("Hehe3").detail("VersionBatchId", self->versionBatchId.get()).detail("BatchIndex", req.batchIndex);
 
 	if (self->versionBatchId.get() == req.batchIndex - 1) {
 		self->initVersionBatch(req.batchIndex);
