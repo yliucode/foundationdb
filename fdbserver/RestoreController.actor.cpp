@@ -35,6 +35,7 @@
 #include "fdbserver/RestoreLoader.actor.h"
 
 #include "flow/Platform.h"
+#include "flow/Trace.h"
 #include "flow/actorcompiler.h" // This must be the last #include.
 
 ACTOR static Future<Void> clearDB(Database cx);
@@ -115,7 +116,7 @@ ACTOR Future<Void> startRestoreController(Reference<RestoreWorkerData> controlle
 		// recruitRestoreRoles must come after controllerWorker has finished collectWorkerInterface
 		wait(recruitRestoreRoles(controllerWorker, self));
 
-		// self->addActor.send(updateHeartbeatTime(self));
+		self->addActor.send(updateHeartbeatTime(self));
 		self->addActor.send(checkRolesLiveness(self));
 		self->addActor.send(updateProcessMetrics(self));
 		self->addActor.send(traceProcessMetrics(self, "RestoreController"));
@@ -247,6 +248,8 @@ ACTOR Future<Void> startProcessRestoreRequests(Reference<RestoreControllerData> 
 
 	// Step: Perform the restore requests
 	try {
+
+		// loop to process each store request
 		for (restoreIndex = 0; restoreIndex < restoreRequests.size(); restoreIndex++) {
 			state RestoreRequest request = restoreRequests[restoreIndex];
 			state KeyRange range = request.range.removePrefix(request.removePrefix).withPrefix(request.addPrefix);
@@ -687,7 +690,6 @@ void splitKeyRangeForAppliers(Reference<ControllerBatchData> batchData,
 
 ACTOR static Future<std::vector<RestoreRequest>> collectRestoreRequests(Database cx) {
 	state std::vector<RestoreRequest> restoreRequests;
-	state Future<Void> watch4RestoreRequest;
 	state ReadYourWritesTransaction tr(cx);
 
 	// restoreRequestTriggerKey should already been set
@@ -701,6 +703,7 @@ ACTOR static Future<std::vector<RestoreRequest>> collectRestoreRequests(Database
 			Optional<Value> numRequests = wait(tr.get(restoreRequestTriggerKey));
 			ASSERT(numRequests.present());
 
+			// we can get range here
 			Standalone<RangeResultRef> restoreRequestValues =
 			    wait(tr.getRange(restoreRequestKeys, CLIENT_KNOBS->TOO_MANY));
 			ASSERT(!restoreRequestValues.more);
@@ -1133,7 +1136,6 @@ ACTOR static Future<Void> updateHeartbeatTime(Reference<RestoreControllerData> s
 		}
 
 		fTimeout = delay(SERVER_KNOBS->FASTRESTORE_HEARTBEAT_DELAY);
-
 		// Here we have to handle error, otherwise controller worker will fail and exit.
 		try {
 			wait(waitForAll(fReplies) || fTimeout);

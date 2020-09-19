@@ -364,6 +364,8 @@ extern const KeyRangeRef restoreRequestKeys;
 extern const KeyRangeRef restoreApplierKeys;
 extern const KeyRef restoreApplierTxnValue;
 
+extern const KeyRef workloadKeyPrefixKey;
+
 const Key restoreApplierKeyFor(UID const& applierID, int64_t batchIndex, Version version);
 std::tuple<UID, int64_t, Version> decodeRestoreApplierKey(ValueRef const& key);
 const Key restoreWorkerKeyFor(UID const& workerID);

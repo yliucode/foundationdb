@@ -33,6 +33,8 @@ struct AtomicOpsWorkload : TestWorkload {
 	int opNum, actorCount, nodeCount;
 	uint32_t opType;
 	bool apiVersion500 = false;
+	Key keyPrefix;
+	bool fetchKeyPrefixFromDB;
 
 	double testDuration, transactionsPerSecond;
 	vector<Future<Void>> clients;
@@ -46,6 +48,8 @@ struct AtomicOpsWorkload : TestWorkload {
 		actorCount = getOption( options, LiteralStringRef("actorsPerClient"), transactionsPerSecond / 5 );
 		opType = getOption( options, LiteralStringRef("opType"), -1 );
 		nodeCount = getOption( options, LiteralStringRef("nodeCount"), 1000 );
+		keyPrefix = unprintable(getOption(options, "keyPrefix"_sr, LiteralStringRef("")).toString());
+		fetchKeyPrefixFromDB = getOption(options, "fetchKeyPrefixFromDB"_sr, false);
 		// Atomic OPs Min and And have modified behavior from api version 510. Hence allowing testing for older version (500) with a 10% probability
 		// Actual change of api Version happens in setup
 		apiVersion500 = ((sharedRandomNumber % 10) == 0);
@@ -141,15 +145,20 @@ struct AtomicOpsWorkload : TestWorkload {
 		Key logKey(format("log%08x%08x%08x", group, clientId, opNum));
 		Key debugKey(format("debug%08x%08x%08x", group, clientId, opNum));
 		opNum++;
-		return std::make_pair(logKey, debugKey);
+		return std::make_pair(logKey.withPrefix(keyPrefix), debugKey.withPrefix(keyPrefix));
 	}
 
 	ACTOR Future<Void> _setup( Database cx, AtomicOpsWorkload* self ) {
+		if (self->fetchKeyPrefixFromDB) {
+			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx));
+			self->keyPrefix = _keyPrefix;
+		}
+
 		// Sanity check if log keyspace has elements
 		state ReadYourWritesTransaction tr1(cx);
 		loop {
 			try {
-				Key begin(std::string("log"));
+				Key begin = Key(std::string("log")).withPrefix(self->keyPrefix);
 				Standalone<RangeResultRef> log =
 				    wait(tr1.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY));
 				if (!log.empty()) {
@@ -175,7 +184,8 @@ struct AtomicOpsWorkload : TestWorkload {
 				try {
 					for(int i = 0; i < self->nodeCount/100; i++) {
 						uint64_t intValue = 0;
-						tr.set(StringRef(format("ops%08x%08x",g,i)), StringRef((const uint8_t*) &intValue, sizeof(intValue)));
+						tr.set(Key(format("ops%08x%08x", g, i)).withPrefix(self->keyPrefix),
+						       StringRef((const uint8_t*)&intValue, sizeof(intValue)));
 					}
 					wait( tr.commit() );
 					break;
@@ -198,7 +208,7 @@ struct AtomicOpsWorkload : TestWorkload {
 				state Key val = StringRef((const uint8_t*)&intValue, sizeof(intValue));
 				state std::pair<Key, Key> logDebugKey = self->logDebugKey(group);
 				int nodeIndex = deterministicRandom()->randomInt(0, self->nodeCount / 100);
-				state Key opsKey(format("ops%08x%08x", group, nodeIndex));
+				state Key opsKey = Key(format("ops%08x%08x", group, nodeIndex)).withPrefix(self->keyPrefix);
 				try {
 					tr.set(logDebugKey.first, val); // set log key
 					tr.set(logDebugKey.second, opsKey); // set debug key; one opsKey can have multiple logs key
@@ -227,10 +237,10 @@ struct AtomicOpsWorkload : TestWorkload {
 		}
 	}
 
-	ACTOR Future<Void> dumpLogKV(Database cx, int g) {
+	ACTOR Future<Void> dumpLogKV(Database cx, Key keyPrefix, int g) {
 		state ReadYourWritesTransaction tr(cx);
 		try {
-			Key begin(format("log%08x", g));
+			Key begin = Key(format("log%08x", g)).withPrefix(keyPrefix);
 			Standalone<RangeResultRef> log = wait(tr.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY));
 			if (log.more) {
 				TraceEvent(SevError, "LogHitTxnLimits").detail("Result", log.toString());
@@ -253,10 +263,10 @@ struct AtomicOpsWorkload : TestWorkload {
 		return Void();
 	}
 
-	ACTOR Future<Void> dumpDebugKV(Database cx, int g) {
+	ACTOR Future<Void> dumpDebugKV(Database cx, Key keyPrefix, int g) {
 		state ReadYourWritesTransaction tr(cx);
 		try {
-			Key begin(format("debug%08x", g));
+			Key begin = Key(format("debug%08x", g)).withPrefix(keyPrefix);
 			Standalone<RangeResultRef> debuglog =
 			    wait(tr.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY));
 			if (debuglog.more) {
@@ -272,10 +282,10 @@ struct AtomicOpsWorkload : TestWorkload {
 		return Void();
 	}
 
-	ACTOR Future<Void> dumpOpsKV(Database cx, int g) {
+	ACTOR Future<Void> dumpOpsKV(Database cx, Key keyPrefix, int g) {
 		state ReadYourWritesTransaction tr(cx);
 		try {
-			Key begin(format("ops%08x", g));
+			Key begin = Key(format("ops%08x", g)).withPrefix(keyPrefix);
 			Standalone<RangeResultRef> ops =
 			    wait(tr.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY));
 			if (ops.more) {
@@ -303,8 +313,8 @@ struct AtomicOpsWorkload : TestWorkload {
 		// Get mapping between opsKeys and debugKeys
 		state ReadYourWritesTransaction tr1(cx);
 		state std::map<Key, Key> records; // <ops, debugKey>
-		Standalone<RangeResultRef> debuglog =
-		    wait(tr1.getRange(prefixRange(format("debug%08x", g)), CLIENT_KNOBS->TOO_MANY));
+		Standalone<RangeResultRef> debuglog = wait(
+		    tr1.getRange(prefixRange(Key(format("debug%08x", g)).withPrefix(self->keyPrefix)), CLIENT_KNOBS->TOO_MANY));
 		if (debuglog.more) {
 			TraceEvent(SevError, "DebugLogHitTxnLimits").detail("Result", debuglog.toString());
 			return Void();
@@ -316,7 +326,8 @@ struct AtomicOpsWorkload : TestWorkload {
 		// Get log key's value and assign it to the associated debugKey
 		state ReadYourWritesTransaction tr2(cx);
 		state std::map<Key, int64_t> logVal; // debugKey, log's value
-		Standalone<RangeResultRef> log = wait(tr2.getRange(prefixRange(format("log%08x", g)), CLIENT_KNOBS->TOO_MANY));
+		Standalone<RangeResultRef> log = wait(
+		    tr2.getRange(prefixRange(Key(format("log%08x", g)).withPrefix(self->keyPrefix)), CLIENT_KNOBS->TOO_MANY));
 		if (log.more) {
 			TraceEvent(SevError, "LogHitTxnLimits").detail("Result", log.toString());
 			return Void();
@@ -324,13 +335,17 @@ struct AtomicOpsWorkload : TestWorkload {
 		for (auto& kv : log) {
 			uint64_t intValue = 0;
 			memcpy(&intValue, kv.value.begin(), kv.value.size());
-			logVal[kv.key.removePrefix(LiteralStringRef("log")).withPrefix(LiteralStringRef("debug"))] = intValue;
+			logVal[kv.key.removePrefix(self->keyPrefix)
+			           .removePrefix(LiteralStringRef("log"))
+			           .withPrefix(LiteralStringRef("debug"))
+			           .withPrefix(self->keyPrefix)] = intValue;
 		}
 
 		// Get opsKeys and validate if it has correct value
 		state ReadYourWritesTransaction tr3(cx);
 		state std::map<Key, int64_t> opsVal; // ops key, ops value
-		Standalone<RangeResultRef> ops = wait(tr3.getRange(prefixRange(format("ops%08x", g)), CLIENT_KNOBS->TOO_MANY));
+		Standalone<RangeResultRef> ops = wait(
+		    tr3.getRange(prefixRange(Key(format("ops%08x", g)).withPrefix(self->keyPrefix)), CLIENT_KNOBS->TOO_MANY));
 		if (ops.more) {
 			TraceEvent(SevError, "OpsHitTxnLimits").detail("Result", ops.toString());
 			return Void();
@@ -371,39 +386,42 @@ struct AtomicOpsWorkload : TestWorkload {
 		for(; g < 100; g++) {
 			state ReadYourWritesTransaction tr(cx);
 			state Standalone<RangeResultRef> log;
+			state Key logResultKey = Key(LiteralStringRef("xlogResult")).withPrefix(self->keyPrefix);
+			state Key opsResultKey = Key(LiteralStringRef("xopsResult")).withPrefix(self->keyPrefix);
 			loop {
 				try {
 					{
 						// Calculate the accumulated value in the log keyspace for the group g
-						Key begin(format("log%08x", g));
+						Key begin = Key(format("log%08x", g)).withPrefix(self->keyPrefix);
 						Standalone<RangeResultRef> log_ = wait( tr.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY) );
 						log = log_;
 						uint64_t zeroValue = 0;
-						tr.set(LiteralStringRef("xlogResult"), StringRef((const uint8_t*) &zeroValue, sizeof(zeroValue)));
+						tr.set(logResultKey, StringRef((const uint8_t*)&zeroValue, sizeof(zeroValue)));
 						for(auto& kv : log) {
 							uint64_t intValue = 0;
 							memcpy(&intValue, kv.value.begin(), kv.value.size());
-							tr.atomicOp(LiteralStringRef("xlogResult"), kv.value, self->opType);
+							tr.atomicOp(logResultKey, kv.value, self->opType);
 						}
 					}
 
 					{
 						// Calculate the accumulated value in the ops keyspace for the group g
-						Key begin(format("ops%08x", g));
+						Key begin = Key(format("ops%08x", g)).withPrefix(self->keyPrefix);
 						Standalone<RangeResultRef> ops = wait( tr.getRange(KeyRangeRef(begin, strinc(begin)), CLIENT_KNOBS->TOO_MANY) );
 						uint64_t zeroValue = 0;
-						tr.set(LiteralStringRef("xopsResult"), StringRef((const uint8_t*) &zeroValue, sizeof(zeroValue)));
+						tr.set(opsResultKey, StringRef((const uint8_t*)&zeroValue, sizeof(zeroValue)));
 						for(auto& kv : ops) {
 							uint64_t intValue = 0;
 							memcpy(&intValue, kv.value.begin(), kv.value.size());
-							tr.atomicOp(LiteralStringRef("xopsResult"), kv.value, self->opType);
+							tr.atomicOp(opsResultKey, kv.value, self->opType);
 						}
 
-						if(tr.get(LiteralStringRef("xlogResult")).get() != tr.get(LiteralStringRef("xopsResult")).get()) {
-							Optional<Standalone<StringRef>> logResult = tr.get(LiteralStringRef("xlogResult")).get();
-							Optional<Standalone<StringRef>> opsResult = tr.get(LiteralStringRef("xopsResult")).get();
+						if (tr.get(logResultKey).get() != tr.get(opsResultKey).get()) {
+							Optional<Standalone<StringRef>> logResult = tr.get(logResultKey).get();
+							Optional<Standalone<StringRef>> opsResult = tr.get(opsResultKey).get();
 							ASSERT(logResult.present());
 							ASSERT(opsResult.present());
+							// here
 							TraceEvent(SevError, "LogMismatch")
 							    .detail("Index", format("log%08x", g))
 							    .detail("LogResult", printable(logResult))
@@ -412,7 +430,7 @@ struct AtomicOpsWorkload : TestWorkload {
 
 						if( self->opType == MutationRef::AddValue ) {
 							uint64_t opsResult=0;
-							Key opsResultStr = tr.get(LiteralStringRef("xopsResult")).get().get();
+							Key opsResultStr = tr.get(opsResultKey).get().get();
 							memcpy(&opsResult, opsResultStr.begin(), opsResultStr.size());
 							uint64_t logResult=0;
 							for(auto& kv : log) {
@@ -428,9 +446,9 @@ struct AtomicOpsWorkload : TestWorkload {
 								    .detail("Size", opsResultStr.size())
 								    .detail("LowerBoundSum", self->lbsum)
 								    .detail("UpperBoundSum", self->ubsum);
-								wait(self->dumpLogKV(cx, g));
-								wait(self->dumpDebugKV(cx, g));
-								wait(self->dumpOpsKV(cx, g));
+								wait(self->dumpLogKV(cx, self->keyPrefix, g));
+								wait(self->dumpDebugKV(cx, self->keyPrefix, g));
+								wait(self->dumpOpsKV(cx, self->keyPrefix, g));
 								wait(self->validateOpsKey(cx, self, g));
 							}
 						}

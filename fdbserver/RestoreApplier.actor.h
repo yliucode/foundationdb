@@ -406,6 +406,7 @@ struct RestoreApplierData : RestoreRoleData, public ReferenceCounted<RestoreAppl
 	void resetPerRestoreRequest() {
 		batch.clear();
 		finishedBatch = NotifiedVersion(0);
+		versionBatchId = NotifiedVersion(0);
 	}
 
 	std::string describeNode() {

@@ -27,8 +27,9 @@
 struct CycleWorkload : TestWorkload {
 	int actorCount, nodeCount;
 	double testDuration, transactionsPerSecond, minExpectedTransactionsPerSecond;
-	Key		keyPrefix;
-
+	Key keyPrefix;
+	bool fetchKeyPrefixFromDB;
+	std::vector<Key> keyPrefixes;
 	vector<Future<Void>> clients;
 	PerfIntCounter transactions, retries, tooOldRetries, commitFailedRetries;
 	PerfDoubleCounter totalLatency;
@@ -38,18 +39,32 @@ struct CycleWorkload : TestWorkload {
 		transactions("Transactions"), retries("Retries"), totalLatency("Latency"),
 		tooOldRetries("Retries.too_old"), commitFailedRetries("Retries.commit_failed")
 	{
-		testDuration = getOption( options, LiteralStringRef("testDuration"), 10.0 );
-		transactionsPerSecond = getOption( options, LiteralStringRef("transactionsPerSecond"), 5000.0 ) / clientCount;
-		actorCount = getOption( options, LiteralStringRef("actorsPerClient"), transactionsPerSecond / 5 );
-		nodeCount = getOption(options, LiteralStringRef("nodeCount"), transactionsPerSecond * clientCount);
-		keyPrefix = unprintable( getOption(options, LiteralStringRef("keyPrefix"), LiteralStringRef("")).toString() );
-		minExpectedTransactionsPerSecond = transactionsPerSecond * getOption(options, LiteralStringRef("expectedRate"), 0.7);
+		testDuration = getOption(options, "testDuration"_sr, 10.0);
+		transactionsPerSecond = getOption(options, "transactionsPerSecond"_sr, 5000.0) / clientCount;
+		actorCount = getOption(options, "actorsPerClient"_sr, transactionsPerSecond / 5);
+		nodeCount = getOption(options, "nodeCount"_sr, transactionsPerSecond * clientCount);
+		keyPrefix = unprintable(getOption(options, "keyPrefix"_sr, LiteralStringRef("")).toString());
+		fetchKeyPrefixFromDB = getOption(options, "fetchKeyPrefixFromDB"_sr, false);
+		minExpectedTransactionsPerSecond = transactionsPerSecond * getOption(options, "expectedRate"_sr, 0.7);
 	}
 
 	virtual std::string description() { return "CycleWorkload"; }
-	virtual Future<Void> setup( Database const& cx ) {
-		return bulkSetup( cx, this, nodeCount, Promise<double>() );
+
+	ACTOR Future<Void> _setup(Database cx, CycleWorkload* self) {
+		if (self->fetchKeyPrefixFromDB) {
+			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx));
+			self->keyPrefix = _keyPrefix;
+			TraceEvent("CycleWorkloadFetchKeyPrefixFromDB").detail("Key", self->keyPrefix);
+		}
+		wait(bulkSetup(cx, self, self->nodeCount, Promise<double>()));
+		return Void();
 	}
+
+	virtual Future<Void> setup( Database const& cx ) {
+		// TODO: give warning when fetchKeyPrefixFromDB is set that it will override keyPrefix set.
+		return _setup(cx, this);
+	}
+
 	virtual Future<Void> start( Database const& cx ) {
 		for(int c=0; c<actorCount; c++)
 			clients.push_back(
@@ -163,6 +178,7 @@ struct CycleWorkload : TestWorkload {
 		int i=0;
 		for(int c=0; c<nodeCount; c++) {
 			if (c && !i) {
+				// Here
 				TraceEvent(SevError, "TestFailure").detail("Reason", "Cycle got shorter").detail("Before", nodeCount).detail("After", c).detail("KeyPrefix", keyPrefix.printable());
 				logTestData(data);
 				return false;

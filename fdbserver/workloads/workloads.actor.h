@@ -19,6 +19,8 @@
  */
 
 #pragma once
+#include "fdbclient/FDBTypes.h"
+#include "flow/Trace.h"
 #if defined(NO_INTELLISENSE) && !defined(FDBSERVER_WORKLOADS_ACTOR_G_H)
 #define FDBSERVER_WORKLOADS_ACTOR_G_H
 #include "fdbserver/workloads/workloads.actor.g.h"
@@ -75,6 +77,70 @@ struct TestWorkload : NonCopyable, WorkloadContext {
 	virtual void getMetrics( vector<PerfMetric>& m ) = 0;
 
 	virtual double getCheckTimeout() { return 3000; }
+
+	ACTOR Future<Void> _setupWorkloadKeyPrefix(Database cx, Key keyPrefix) {
+		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
+		TraceEvent("Hehe3");
+		loop {
+			try {
+				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+				Optional<Value> _keyPrefix = wait(tr->get(workloadKeyPrefixKey));
+				TraceEvent("GetKey").detail("Present", _keyPrefix.present());
+				if (_keyPrefix.present()) {
+					TraceEvent("AlreadyHasKey").detail("Key", _keyPrefix.get());
+					break;
+				}
+				tr->set(workloadKeyPrefixKey, StringRef(keyPrefix.toString()));
+				wait(tr->commit());
+				TraceEvent("SetKey").detail("Key", keyPrefix);
+				break;
+			} catch (Error& e) {
+				TraceEvent("Hehe2").error(e);
+				// tr.clear();
+				// tr.setPtrUnsafe(new ReadYourWritesTransaction(cx));
+				tr->reset();
+				wait(tr->onError(e));
+			}
+		}
+		return Void();
+	}
+
+	virtual Future<Void> setupWorkloadKeyPrefix(const Database& cx, const Key& keyPrefix) {
+		return _setupWorkloadKeyPrefix(cx, keyPrefix);
+	}
+
+	ACTOR Future<Key> _waitForWorkloadKeyPrefix(Database cx) {
+		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
+		state Optional<Key> keyPrefix;
+		TraceEvent(SevInfo, "WaitOnWorkloadKeyPrefix");
+		// wait for the workloadKeyPrefixKey to be set by the client/test workload
+		loop {
+			try {
+				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+				Optional<Value> _keyPrefix = wait(tr->get(workloadKeyPrefixKey));
+				keyPrefix = _keyPrefix;
+				if (!keyPrefix.present()) {
+					state Future<Void> watchForKeyPrefix = tr->watch(workloadKeyPrefixKey);
+					wait(tr->commit());
+					TraceEvent(SevInfo, "WaitOnWorkloadKeyPrefixKey");
+					wait(watchForKeyPrefix);
+					TraceEvent(SevInfo, "DetectWorkloadKeyPrefixKeyChanged");
+				} else {
+					TraceEvent(SevInfo, "WorkloadKeyPrefix").detail("TriggerKey", keyPrefix.get().toString());
+					break;
+				}
+			} catch (Error& e) {
+				tr->reset();
+				wait(tr->onError(e));
+			}
+		}
+		ASSERT(keyPrefix.present());
+		return keyPrefix.get();
+	}
+
+	virtual Future<Key> waitForWorkloadKeyPrefix(const Database& cx) { return _waitForWorkloadKeyPrefix(cx); }
 
 	enum WorkloadPhase {
 		SETUP = 1,

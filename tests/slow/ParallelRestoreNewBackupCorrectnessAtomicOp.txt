@@ -9,6 +9,7 @@ testTitle=BackupAndParallelRestoreWithAtomicOp
 ;    nodeCount=4
 ;    transactionsPerSecond=250.0
     testDuration=30.0
+    fetchKeyPrefixFromDB=true
     clearAfterTest=false
 ; Specify a type of atomicOp
 ;	opType=0
@@ -24,7 +25,8 @@ testTitle=BackupAndParallelRestoreWithAtomicOp
     restoreAfter=60.0
     clearAfterTest=false
     simBackupAgents=BackupToFile
-    backupRangesCount=-1
+;   backupRangesCount -2 means number backup ranges is randomly generated in [-1, 10]
+    backupRangesCount=-2
 ; use new backup
     usePartitionedLogs=true
 

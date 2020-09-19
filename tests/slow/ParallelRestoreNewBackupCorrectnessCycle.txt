@@ -7,6 +7,7 @@ testTitle=BackupAndRestore
      testDuration=30.0
      expectedRate=0
      clearAfterTest=false
+     fetchKeyPrefixFromDB=true
  ;	keyPrefix=!
 
  ; Each testName=RunRestoreWorkerWorkload creates a restore worker
@@ -19,8 +20,9 @@ testTitle=BackupAndRestore
      restoreAfter=60.0
      clearAfterTest=false
      simBackupAgents=BackupToFile
- ; backupRangesCount<0 means backup the entire normal keyspace
-     backupRangesCount=-1
+ ; backupRangesCount -1 means backup the entire normal keyspace
+ ; backupRangesCount -2 means number backup ranges is randomly generated in [-1, 10]
+     backupRangesCount=-2
      usePartitionedLogs=true
 
      testName=RandomClogging
