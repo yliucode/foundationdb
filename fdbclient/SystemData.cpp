@@ -907,7 +907,8 @@ const KeyRangeRef restoreApplierKeys(LiteralStringRef("\xff\x02/restoreApplier/"
                                      LiteralStringRef("\xff\x02/restoreApplier0"));
 const KeyRef restoreApplierTxnValue = LiteralStringRef("1");
 
-const KeyRef workloadKeyPrefixKey = LiteralStringRef("\xff\x02/workloadKeyPrefix");
+const KeyRef workloadKeyPrefixesKey = LiteralStringRef("\xff\x02/workloadKeyPrefixesKey");
+const KeyRef workloadKeyPrefixesTriggerKey = LiteralStringRef("\xff\x02/workloadKeyPrefixesTrigger");
 
 // restoreApplierKeys: track atomic transaction progress to ensure applying atomicOp exactly once
 // Version and batchIndex are passed in as LittleEndian,

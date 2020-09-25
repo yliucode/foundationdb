@@ -254,6 +254,8 @@ ACTOR Future<Void> startProcessRestoreRequests(Reference<RestoreControllerData> 
 			state RestoreRequest request = restoreRequests[restoreIndex];
 			state KeyRange range = request.range.removePrefix(request.removePrefix).withPrefix(request.addPrefix);
 			TraceEvent("FastRestoreControllerProcessRestoreRequests", self->id())
+			    .detail("RestoreRequestIndex", restoreIndex)
+			    .detail("NumOfRestoreRequests", restoreRequests.size())
 			    .detail("RestoreRequestInfo", request.toString())
 			    .detail("TransformedKeyRange", range);
 			// TODO: Initialize controllerData and all loaders and appliers' data for each restore request!
@@ -742,6 +744,7 @@ ACTOR static Future<Version> collectBackupFiles(Reference<IBackupContainer> bc, 
 
 	TraceEvent("FastRestoreControllerPhaseCollectBackupFilesStart")
 	    .detail("TargetVersion", request.targetVersion)
+	    .detail("Range", request.range.toString())
 	    .detail("BackupDesc", desc.toString())
 	    .detail("UseRangeFile", SERVER_KNOBS->FASTRESTORE_USE_RANGE_FILE)
 	    .detail("UseLogFile", SERVER_KNOBS->FASTRESTORE_USE_LOG_FILE);
@@ -749,14 +752,33 @@ ACTOR static Future<Version> collectBackupFiles(Reference<IBackupContainer> bc, 
 		std::cout << "Restore to version: " << request.targetVersion << "\nBackupDesc: \n" << desc.toString() << "\n\n";
 	}
 
-	state VectorRef<KeyRangeRef> restoreRanges;
-	restoreRanges.add(request.range);
+	state Standalone<VectorRef<KeyRangeRef>> restoreRanges;
+	restoreRanges.push_back(restoreRanges.arena(), request.range);
+	// state VectorRef<KeyRangeRef> restoreRanges;
+	// restoreRanges.add(request.range);
 	Optional<RestorableFileSet> restorable = wait(bc->getRestoreSet(request.targetVersion, restoreRanges));
 
 	if (!restorable.present()) {
 		TraceEvent(SevWarn, "FastRestoreControllerPhaseCollectBackupFiles")
 		    .detail("NotRestorable", request.targetVersion);
 		throw restore_missing_data();
+	} else {
+		TraceEvent("FastRestoreControllerPhaseCollectBackupFilesSetMetadata")
+		    .detail("Range", request.range.toString())
+		    .detail("TargetVersion", restorable.get().targetVersion)
+		    .detail("LogBegin", restorable.get().continuousBeginVersion)
+		    .detail("LogEnd", restorable.get().continuousEndVersion)
+		    .detail("KeyRangeSize", restorable.get().keyRanges.size());
+		for (const auto& range : restorable.get().ranges) {
+			TraceEvent("FastRestoreControllerPhaseCollectBackupFilesSetRange")
+			    .detail("KeyRange", (restorable.get().keyRanges.count(range.fileName) > 0)
+			                            ? restorable.get().keyRanges.at(range.fileName).toString()
+			                            : "absent")
+			    .detail("Range", range.toString());
+		}
+		for (const auto& log : restorable.get().logs) {
+			TraceEvent("FastRestoreControllerPhaseCollectBackupFilesSetLog").detail("Log", log.toString());
+		}
 	}
 
 	ASSERT(rangeFiles->empty());

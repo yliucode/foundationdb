@@ -22,13 +22,14 @@
 #include "fdbserver/TesterInterface.actor.h"
 #include "fdbserver/workloads/workloads.actor.h"
 #include "fdbserver/workloads/BulkSetup.actor.h"
+#include "flow/Trace.h"
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 struct CycleWorkload : TestWorkload {
 	int actorCount, nodeCount;
 	double testDuration, transactionsPerSecond, minExpectedTransactionsPerSecond;
 	Key keyPrefix;
-	bool fetchKeyPrefixFromDB;
+	int keyPrefixFromDBIndex;
 	std::vector<Key> keyPrefixes;
 	vector<Future<Void>> clients;
 	PerfIntCounter transactions, retries, tooOldRetries, commitFailedRetries;
@@ -39,29 +40,34 @@ struct CycleWorkload : TestWorkload {
 		transactions("Transactions"), retries("Retries"), totalLatency("Latency"),
 		tooOldRetries("Retries.too_old"), commitFailedRetries("Retries.commit_failed")
 	{
-		testDuration = getOption(options, "testDuration"_sr, 10.0);
-		transactionsPerSecond = getOption(options, "transactionsPerSecond"_sr, 5000.0) / clientCount;
-		actorCount = getOption(options, "actorsPerClient"_sr, transactionsPerSecond / 5);
-		nodeCount = getOption(options, "nodeCount"_sr, transactionsPerSecond * clientCount);
-		keyPrefix = unprintable(getOption(options, "keyPrefix"_sr, LiteralStringRef("")).toString());
-		fetchKeyPrefixFromDB = getOption(options, "fetchKeyPrefixFromDB"_sr, false);
-		minExpectedTransactionsPerSecond = transactionsPerSecond * getOption(options, "expectedRate"_sr, 0.7);
+		testDuration = getOption(options, LiteralStringRef("testDuration"), 10.0);
+		transactionsPerSecond = getOption(options, LiteralStringRef("transactionsPerSecond"), 5000.0) / clientCount;
+		actorCount = getOption(options, LiteralStringRef("actorsPerClient"), transactionsPerSecond / 5);
+		nodeCount = getOption(options, LiteralStringRef("nodeCount"), transactionsPerSecond * clientCount);
+		keyPrefix = unprintable(getOption(options, LiteralStringRef("keyPrefix"), LiteralStringRef("")).toString());
+		keyPrefixFromDBIndex = getOption(options, LiteralStringRef("keyPrefixFromDBIndex"), -1);
+		minExpectedTransactionsPerSecond =
+		    transactionsPerSecond * getOption(options, LiteralStringRef("expectedRate"), 0.7);
 	}
 
 	virtual std::string description() { return "CycleWorkload"; }
 
 	ACTOR Future<Void> _setup(Database cx, CycleWorkload* self) {
-		if (self->fetchKeyPrefixFromDB) {
-			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx));
+		if (self->keyPrefixFromDBIndex >= 0) {
+			// use client id for now
+			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx, self->keyPrefixFromDBIndex));
+			TraceEvent("CycleWorkloadFetchKeyPrefixFromDB")
+			    .detail("KeyPrefixFromDBIndex", self->keyPrefixFromDBIndex)
+			    .detail("GetKeyPrefix", _keyPrefix)
+			    .detail("OverrideKeyPrefix", self->keyPrefix);
 			self->keyPrefix = _keyPrefix;
-			TraceEvent("CycleWorkloadFetchKeyPrefixFromDB").detail("Key", self->keyPrefix);
 		}
 		wait(bulkSetup(cx, self, self->nodeCount, Promise<double>()));
 		return Void();
 	}
 
 	virtual Future<Void> setup( Database const& cx ) {
-		// TODO: give warning when fetchKeyPrefixFromDB is set that it will override keyPrefix set.
+		TraceEvent("Hehe").detail("ActorCount", actorCount).detail("NodeCount", nodeCount);
 		return _setup(cx, this);
 	}
 
@@ -201,6 +207,7 @@ struct CycleWorkload : TestWorkload {
 			logTestData(data);
 			return false;
 		}
+		// logTestData(data);
 		return true;
 	}
 	ACTOR Future<bool> cycleCheck( Database cx, CycleWorkload* self, bool ok ) {
@@ -212,13 +219,18 @@ struct CycleWorkload : TestWorkload {
 			ok = false;
 		}
 		if (!self->clientId) {
+			// if (self->clientId == 0 && self->keyPrefix.printable() == "T") {
 			// One client checks the validity of the cycle
 			state Transaction tr(cx);
 			state int retryCount = 0;
 			loop {
 				try {
 					state Version v = wait( tr.getReadVersion() );
-					Standalone<RangeResultRef> data = wait(tr.getRange(firstGreaterOrEqual(doubleToTestKey(0.0, self->keyPrefix)), firstGreaterOrEqual(doubleToTestKey(1.0, self->keyPrefix)), self->nodeCount + 1));
+					// Standalone<RangeResultRef> data = wait(tr.getRange(firstGreaterOrEqual(doubleToTestKey(0.0,
+					// self->keyPrefix)), firstGreaterOrEqual(doubleToTestKey(1.0, self->keyPrefix)), self->nodeCount +
+					// 1));
+					Standalone<RangeResultRef> data = wait(
+					    tr.getRange(KeyRangeRef(self->keyPrefix, strinc(self->keyPrefix)), CLIENT_KNOBS->TOO_MANY));
 					ok = self->cycleCheckData( data, v ) && ok;
 					break;
 				} catch (Error& e) {

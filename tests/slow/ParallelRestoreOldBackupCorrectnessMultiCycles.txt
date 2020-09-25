@@ -7,7 +7,7 @@ testTitle=BackupAndRestore
      expectedRate=0
      clearAfterTest=false
  ;   keyPrefix=!
-     fetchKeyPrefixFromDB=true
+     keyPrefixFromDBIndex=0
 
      testName=Cycle
      nodeCount=1000
@@ -16,7 +16,7 @@ testTitle=BackupAndRestore
      expectedRate=0
      clearAfterTest=false
  ;   keyPrefix=z
-     fetchKeyPrefixFromDB=true
+     keyPrefixFromDBIndex=1
 
      testName=Cycle
      nodeCount=1000
@@ -25,7 +25,7 @@ testTitle=BackupAndRestore
      expectedRate=0
      clearAfterTest=false
  ;   keyPrefix=A
-     fetchKeyPrefixFromDB=true
+     keyPrefixFromDBIndex=2
 
      testName=Cycle
      nodeCount=1000
@@ -34,7 +34,7 @@ testTitle=BackupAndRestore
      expectedRate=0
      clearAfterTest=false
  ;   keyPrefix=Z
-     fetchKeyPrefixFromDB=true
+     keyPrefixFromDBIndex=3
 
  ; Each testName=RunRestoreWorkerWorkload creates a restore worker
  ; We need at least 3 restore workers: master, loader, and applier
@@ -48,7 +48,7 @@ testTitle=BackupAndRestore
      simBackupAgents=BackupToFile
  ; backupRangesCount -1 means backup the entire normal keyspace
  ; backupRangesCount -2 means number backup ranges is randomly generated in [-1, 10]
-     backupRangesCount=-2
+     backupRangesCount=4
      usePartitionedLogs=false
 
      testName=RandomClogging

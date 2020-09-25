@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include "fdbclient/FDBTypes.h"
 #include "fdbclient/SystemData.h"
 #include "fdbrpc/simulator.h"
 #include "fdbclient/BackupAgent.actor.h"
@@ -140,8 +141,9 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 			std::vector<std::string> sortedEndpoints(rangeEndpoints.begin(), rangeEndpoints.end());
 			sort(sortedEndpoints.begin(), sortedEndpoints.end());
 			for (auto i = sortedEndpoints.begin(); i != sortedEndpoints.end(); ++i) {
-				const std::string& start = *i++;
-				backupRanges.push_back_deep(backupRanges.arena(), KeyRangeRef(start, *i));
+				beginRange = *i++;
+				endRange = *i;
+				backupRanges.push_back_deep(backupRanges.arena(), KeyRangeRef(beginRange, endRange));
 
 				// Track the added range
 				TraceEvent("BARW_BackupCorrectnessRange", randomID)
@@ -153,18 +155,18 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 
 	virtual std::string description() { return "BackupAndParallelRestoreCorrectness"; }
 
-	ACTOR Future<Void> _setup(BackupAndParallelRestoreCorrectnessWorkload* workload, Database cx, Key keyPrefix) {
-		TraceEvent("BARW_SetupWorkloadKeyPrefix").detail("KeyPrefix", keyPrefix);
-		wait(workload->setupWorkloadKeyPrefix(cx, keyPrefix));
+	ACTOR Future<Void> _setup(BackupAndParallelRestoreCorrectnessWorkload* self, Database cx) {
+		if (self->clientId != 0) return Void();
+		Standalone<VectorRef<KeyRef>> keyPrefixes;
+		for (const auto& keyRange : self->backupRanges) {
+			keyPrefixes.push_back_deep(keyPrefixes.arena(), keyRange.begin);
+		}
+		TraceEvent("BARW_TrySetupWorkloadKeyPrefix").detail("KeyPrefixes", printable(keyPrefixes));
+		wait(self->setupWorkloadKeyPrefixes(cx, keyPrefixes));
 		return Void();
 	}
 
-	virtual Future<Void> setup(Database const& cx) {
-		Key keyPrefix = backupRangesCount == 0
-		                    ? normalKeys.begin
-		                    : backupRanges[deterministicRandom()->randomInt(0, backupRangesCount)].begin;
-		return _setup(this, cx, keyPrefix);
-	}
+	virtual Future<Void> setup(Database const& cx) { return _setup(this, cx); }
 
 	virtual Future<Void> start(Database const& cx) {
 		if (clientId != 0) return Void();
@@ -386,6 +388,7 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 
 	// TODO: Support using key ranges to filter the restorable files set and get a smaller version than keyspace's
 	// minimum restorable version.
+	// todo here
 	static Version pickRandomTargetVersion(const BackupDescription& desc) {
 		Version targetVersion = -1;
 		if (desc.maxRestorableVersion.present()) {
@@ -406,6 +409,7 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 			}
 		}
 		return targetVersion;
+		// return 773678131;
 	}
 
 	ACTOR static Future<Void> _start(Database cx, BackupAndParallelRestoreCorrectnessWorkload* self) {
@@ -536,11 +540,21 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 
 				// Either restore all backup ranges to single target version or break the backup ranges into several
 				// splits and restore each split to its own target version.
+				// to do here
 				// TODO: Support restoring key ranges to a smaller version than whole backup's minimum restotable
 				// version.
+				TraceEvent("BAFRW_Restore")
+				    .detail("MinRestorableVersion",
+				            desc.minRestorableVersion.present() ? desc.minRestorableVersion.get() : -1)
+				    .detail("MaxRestorableVersion",
+				            desc.maxRestorableVersion.present() ? desc.maxRestorableVersion.get() : -1)
+				    .detail("ContiguousLogEnd", desc.contiguousLogEnd.present() ? desc.contiguousLogEnd.get() : -1);
 				std::vector<FileBackupAgent::RestoreKeyRangesVersion> restoreRequests;
+				// Restore to one target version for now
+				// Version targetVersion = pickRandomTargetVersion(desc);
 				if (deterministicRandom()->random01() < 0.1) {
 					restoreRequests.emplace_back(self->backupRanges, pickRandomTargetVersion(desc));
+					// restoreRequests.emplace_back(self->backupRanges, targetVersion);
 				} else {
 					int beginIndex = 0;
 					while (beginIndex < self->backupRanges.size()) {
@@ -548,6 +562,7 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 						int size = deterministicRandom()->randomInt(0, self->backupRanges.size() - beginIndex) + 1;
 						keyRanges.append(self->backupRanges.arena(), self->backupRanges.begin() + beginIndex, size);
 						restoreRequests.emplace_back(keyRanges, pickRandomTargetVersion(desc));
+						// restoreRequests.emplace_back(keyRanges, targetVersion);
 						beginIndex += size;
 					}
 					ASSERT(beginIndex == self->backupRanges.size());

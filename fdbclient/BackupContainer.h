@@ -20,6 +20,7 @@
 
 #ifndef FDBCLIENT_BackupContainer_H
 #define FDBCLIENT_BackupContainer_H
+#include "flow/Trace.h"
 #pragma once
 
 #include "flow/flow.h"
@@ -281,8 +282,9 @@ public:
 	virtual Future<BackupFileList> dumpFileList(Version begin = 0, Version end = std::numeric_limits<Version>::max()) = 0;
 
 	// Get exactly the files necessary to restore the key space filtered by the specified key ranges to targetVersion.
-	// If targetVersion is 'latestVersion', use the minimum restorable version in a snapshot. Returns non-present if
-	// restoring to the given version is not possible.
+	// If targetVersion is 'latestVersion', use the minimum restorable version in a snapshot. For any keyspace snapshot
+	// before 6.3, 'keyRangesFilter' will be ignored since there is no metadata about range file's key range. Returns
+	// non-present if restoring to the given version is not possible.
 	virtual Future<Optional<RestorableFileSet>> getRestoreSet(Version targetVersion,
 	                                                          VectorRef<KeyRangeRef> keyRangesFilter = {}) = 0;
 

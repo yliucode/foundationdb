@@ -1392,9 +1392,14 @@ public:
 
 	ACTOR static Future<Optional<RestorableFileSet>> getRestoreSet_impl(Reference<BackupContainerFileSystem> bc,
 	                                                                    Version targetVersion,
-	                                                                    VectorRef<KeyRangeRef> keyRangesFilter) {
+	                                                                    VectorRef<KeyRangeRef> keyRangesFilterInput) {
+
 		// Find the most recent keyrange snapshot through which we can restore filtered key ranges into targetVersion.
 		state std::vector<KeyspaceSnapshotFile> snapshots = wait(bc->listKeyspaceSnapshots());
+		TraceEvent("BackupContainerGetRestoreSetImpl")
+		    .detail("TargetVersion", targetVersion)
+		    .detail("KeyRangesFilterInput", printable(keyRangesFilterInput))
+		    .detail("NumSnapshots", snapshots.size());
 		state int i = snapshots.size() - 1;
 		for (; i >= 0; i--) {
 			// The smallest version of filtered range files >= snapshot beginVersion > targetVersion
@@ -1409,10 +1414,20 @@ public:
 			std::pair<std::vector<RangeFile>, std::map<std::string, KeyRange>> results =
 			    wait(bc->readKeyspaceSnapshot(snapshots[i]));
 
-			// Old backup does not have metadata about key ranges and can not be filtered with key ranges.
-			if (keyRangesFilter.size() && results.second.empty() && !results.first.empty()) {
-				throw backup_not_filterable_with_key_ranges();
+			// Old backup may not have metadata about key ranges and can not be filtered with key ranges.
+
+			state VectorRef<KeyRangeRef> keyRangesFilter;
+			if (!results.second.empty()) {
+				TraceEvent("BackupContainerGetRestoreSetImpl0");
+				keyRangesFilter = keyRangesFilterInput;
 			}
+			// if (keyRangesFilter.size() && results.second.empty() && !results.first.empty()) {
+			// 	throw backup_not_filterable_with_key_ranges();
+			// }
+			TraceEvent("BackupContainerGetRestoreSetImpl1")
+			    .detail("KeySpaceSnapshotKeyRangesMetadataPrensent", !results.second.empty())
+			    .detail("KeyRangesFilter", printable(keyRangesFilter))
+			    .detail("SnapshotIndex", i);
 
 			// Filter by keyRangesFilter.
 			if (keyRangesFilter.empty()) {
@@ -1470,7 +1485,13 @@ public:
 			wait(store(logs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, false)) &&
 			     store(plogs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, true)));
 
+			TraceEvent("BackupContainerGetRestoreSetImpl2")
+			    .detail("KeyRangesFilter", printable(keyRangesFilter))
+			    .detail("Partitioned", plogs.size())
+			    .detail("SnapshotIndex", i);
+			;
 			if (plogs.size() > 0) {
+
 				logs.swap(plogs);
 				// sort by tag ID so that filterDuplicates works.
 				std::sort(logs.begin(), logs.end(), [](const LogFile& a, const LogFile& b) {

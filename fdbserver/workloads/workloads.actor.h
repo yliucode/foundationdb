@@ -20,6 +20,9 @@
 
 #pragma once
 #include "fdbclient/FDBTypes.h"
+#include "fdbclient/SystemData.h"
+#include "flow/Arena.h"
+#include "flow/IRandom.h"
 #include "flow/Trace.h"
 #if defined(NO_INTELLISENSE) && !defined(FDBSERVER_WORKLOADS_ACTOR_G_H)
 #define FDBSERVER_WORKLOADS_ACTOR_G_H
@@ -78,25 +81,32 @@ struct TestWorkload : NonCopyable, WorkloadContext {
 
 	virtual double getCheckTimeout() { return 3000; }
 
-	ACTOR Future<Void> _setupWorkloadKeyPrefix(Database cx, Key keyPrefix) {
+	ACTOR Future<Void> setupWorkloadKeyPrefixes(Database cx, Standalone<VectorRef<KeyRef>> keyPrefixes) {
 		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
-		TraceEvent("Hehe3");
+		// TraceEvent("Hehe3");
 		loop {
 			try {
 				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
-				Optional<Value> _keyPrefix = wait(tr->get(workloadKeyPrefixKey));
-				TraceEvent("GetKey").detail("Present", _keyPrefix.present());
-				if (_keyPrefix.present()) {
-					TraceEvent("AlreadyHasKey").detail("Key", _keyPrefix.get());
+
+				Optional<Value> keyPrefixesTrigger = wait(tr->get(workloadKeyPrefixesTriggerKey));
+				// Standalone<RangeResultRef> _keyPrefixes = wait(tr->getRange(
+				//     KeyRangeRef(workloadKeyPrefixesKey, strinc(workloadKeyPrefixesKey)), CLIENT_KNOBS->TOO_MANY));
+				// TraceEvent("GetKey").detail("Present", _keyPrefix.present());
+				if (keyPrefixesTrigger.present()) {
+					// TraceEvent("AlreadyHasKey").detail("Key", _keyPrefix.get());
 					break;
 				}
-				tr->set(workloadKeyPrefixKey, StringRef(keyPrefix.toString()));
+
+				for (int i = 0; i < keyPrefixes.size(); i++) {
+					tr->set(KeyRef(format("%d", i)).withPrefix(workloadKeyPrefixesKey), keyPrefixes[i]);
+				}
+				tr->set(workloadKeyPrefixesTriggerKey, LiteralStringRef("str"));
 				wait(tr->commit());
-				TraceEvent("SetKey").detail("Key", keyPrefix);
+				TraceEvent("SetKeySuccuss").detail("Key", printable(keyPrefixes));
 				break;
 			} catch (Error& e) {
-				TraceEvent("Hehe2").error(e);
+				// TraceEvent("Hehe2").error(e);
 				// tr.clear();
 				// tr.setPtrUnsafe(new ReadYourWritesTransaction(cx));
 				tr->reset();
@@ -106,41 +116,46 @@ struct TestWorkload : NonCopyable, WorkloadContext {
 		return Void();
 	}
 
-	virtual Future<Void> setupWorkloadKeyPrefix(const Database& cx, const Key& keyPrefix) {
-		return _setupWorkloadKeyPrefix(cx, keyPrefix);
-	}
+	// // TODO: Get rid off this
+	// virtual Future<Void> setupWorkloadKeyPrefixes(Database cx, Standalone<VectorRef<KeyRef>> keyPrefixes) {
+	// 	return _setupWorkloadKeyPrefixes(cx, keyPrefixes);
+	// }
 
-	ACTOR Future<Key> _waitForWorkloadKeyPrefix(Database cx) {
+	ACTOR Future<Key> waitForWorkloadKeyPrefix(Database cx, int keyPrefixIndex) {
 		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
-		state Optional<Key> keyPrefix;
+		state Standalone<VectorRef<KeyRef>> keyPrefixes;
 		TraceEvent(SevInfo, "WaitOnWorkloadKeyPrefix");
 		// wait for the workloadKeyPrefixKey to be set by the client/test workload
 		loop {
 			try {
 				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
-				Optional<Value> _keyPrefix = wait(tr->get(workloadKeyPrefixKey));
-				keyPrefix = _keyPrefix;
-				if (!keyPrefix.present()) {
-					state Future<Void> watchForKeyPrefix = tr->watch(workloadKeyPrefixKey);
-					wait(tr->commit());
-					TraceEvent(SevInfo, "WaitOnWorkloadKeyPrefixKey");
-					wait(watchForKeyPrefix);
-					TraceEvent(SevInfo, "DetectWorkloadKeyPrefixKeyChanged");
-				} else {
-					TraceEvent(SevInfo, "WorkloadKeyPrefix").detail("TriggerKey", keyPrefix.get().toString());
+				Optional<Value> keyPrefixesTrigger = wait(tr->get(workloadKeyPrefixesTriggerKey));
+				if (keyPrefixesTrigger.present()) {
+					Standalone<RangeResultRef> keyPrefixesRange = wait(tr->getRange(
+					    KeyRangeRef(workloadKeyPrefixesKey, strinc(workloadKeyPrefixesKey)), CLIENT_KNOBS->TOO_MANY));
+					for (auto& kv : keyPrefixesRange) {
+						keyPrefixes.push_back_deep(keyPrefixes.arena(), kv.value);
+					}
+					// TraceEvent(SevInfo, "WorkloadKeyPrefix").detail("TriggerKey", keyPrefix.get().toString());
 					break;
 				}
+
+				state Future<Void> watchForKeyPrefixesTrigger = tr->watch(workloadKeyPrefixesTriggerKey);
+				wait(tr->commit());
+				TraceEvent(SevInfo, "WaitOnWorkloadKeyPrefixesTriggerKey");
+				wait(watchForKeyPrefixesTrigger);
+				TraceEvent(SevInfo, "DetectWorkloadKeyPrefixesTriggerKeyChanged");
 			} catch (Error& e) {
-				tr->reset();
 				wait(tr->onError(e));
 			}
+			tr->reset();
 		}
-		ASSERT(keyPrefix.present());
-		return keyPrefix.get();
+		// ASSERT(keyPrefixIndex < keyPrefixes.size());
+		return keyPrefixes[keyPrefixIndex % keyPrefixes.size()];
 	}
 
-	virtual Future<Key> waitForWorkloadKeyPrefix(const Database& cx) { return _waitForWorkloadKeyPrefix(cx); }
+	// virtual Future<Key> waitForWorkloadKeyPrefix(Database cx) { return _waitForWorkloadKeyPrefix(cx); }
 
 	enum WorkloadPhase {
 		SETUP = 1,

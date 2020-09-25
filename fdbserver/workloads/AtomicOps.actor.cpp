@@ -24,6 +24,7 @@
 #include "fdbserver/workloads/BulkSetup.actor.h"
 #include "fdbclient/ReadYourWrites.h"
 #include "fdbserver/workloads/workloads.actor.h"
+#include "flow/IRandom.h"
 #include "flow/actorcompiler.h"  // This must be the last #include.
 
 //#define SevAtomicOpDebug SevInfo
@@ -34,7 +35,7 @@ struct AtomicOpsWorkload : TestWorkload {
 	uint32_t opType;
 	bool apiVersion500 = false;
 	Key keyPrefix;
-	bool fetchKeyPrefixFromDB;
+	int keyPrefixFromDBIndex;
 
 	double testDuration, transactionsPerSecond;
 	vector<Future<Void>> clients;
@@ -48,8 +49,8 @@ struct AtomicOpsWorkload : TestWorkload {
 		actorCount = getOption( options, LiteralStringRef("actorsPerClient"), transactionsPerSecond / 5 );
 		opType = getOption( options, LiteralStringRef("opType"), -1 );
 		nodeCount = getOption( options, LiteralStringRef("nodeCount"), 1000 );
-		keyPrefix = unprintable(getOption(options, "keyPrefix"_sr, LiteralStringRef("")).toString());
-		fetchKeyPrefixFromDB = getOption(options, "fetchKeyPrefixFromDB"_sr, false);
+		keyPrefix = unprintable(getOption(options, LiteralStringRef("keyPrefix"), LiteralStringRef("")).toString());
+		keyPrefixFromDBIndex = getOption(options, LiteralStringRef("keyPrefixFromDBIndex"), -1);
 		// Atomic OPs Min and And have modified behavior from api version 510. Hence allowing testing for older version (500) with a 10% probability
 		// Actual change of api Version happens in setup
 		apiVersion500 = ((sharedRandomNumber % 10) == 0);
@@ -149,8 +150,8 @@ struct AtomicOpsWorkload : TestWorkload {
 	}
 
 	ACTOR Future<Void> _setup( Database cx, AtomicOpsWorkload* self ) {
-		if (self->fetchKeyPrefixFromDB) {
-			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx));
+		if (self->keyPrefixFromDBIndex >= 0) {
+			Key _keyPrefix = wait(self->waitForWorkloadKeyPrefix(cx, self->keyPrefixFromDBIndex));
 			self->keyPrefix = _keyPrefix;
 		}
 

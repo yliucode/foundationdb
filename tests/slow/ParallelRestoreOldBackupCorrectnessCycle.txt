@@ -6,7 +6,7 @@ testTitle=BackupAndRestore
      testDuration=30.0
      expectedRate=0
      clearAfterTest=false
-     fetchKeyPrefixFromDB=true
+     keyPrefixFromDBIndex=0
  ;	keyPrefix=!
 
  ; Each testName=RunRestoreWorkerWorkload creates a restore worker
